@@ -1,0 +1,2 @@
+# 生产环境额外依赖（在 Ubuntu 上通过 deploy/deploy.sh 安装）
+gunicorn==23.*

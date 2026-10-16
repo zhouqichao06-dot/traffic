@@ -1,0 +1,20 @@
+[Unit]
+Description=Django traffic_api (gunicorn)
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+WorkingDirectory=__APP_DIR__
+# EnvironmentFile 会把 .env 中的键值注入进程环境
+EnvironmentFile=__APP_DIR__/.env
+ExecStart=__APP_DIR__/.venv/bin/gunicorn traffic_api.wsgi:application \
+    --bind 127.0.0.1:8000 \
+    --workers 3 \
+    --access-logfile - \
+    --error-logfile -
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

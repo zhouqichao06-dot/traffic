@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>固定路线管理控制台</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
+    background: #f5f7fa; color: #333; font-size: 14px;
+  }
+  .hidden { display: none !important; }
+
+  /* ---------- 登录页 ---------- */
+  #loginView {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(160deg, #2b4a6f 0%, #1e3a5f 100%);
+  }
+  .login-card {
+    background: #fff; border-radius: 10px; padding: 36px 40px; width: 380px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.25);
+  }
+  .login-card h1 { font-size: 20px; color: #1e3a5f; text-align: center; margin-bottom: 6px; }
+  .login-card .sub { font-size: 12px; color: #8a94a6; text-align: center; margin-bottom: 24px; }
+  .login-card label { display: block; font-size: 13px; color: #555; margin: 14px 0 6px; }
+  .login-card input {
+    width: 100%; padding: 10px 12px; border: 1px solid #d4d9e0; border-radius: 6px;
+    font-size: 14px; outline: none;
+  }
+  .login-card input:focus { border-color: #2f6fed; box-shadow: 0 0 0 3px rgba(47,111,237,.12); }
+  .login-btn {
+    width: 100%; margin-top: 22px; padding: 11px; border: none; border-radius: 6px;
+    background: #2f6fed; color: #fff; font-size: 15px; cursor: pointer;
+  }
+  .login-btn:hover { background: #265fd6; }
+  .login-err { color: #d93025; font-size: 13px; margin-top: 10px; min-height: 18px; text-align: center; }
+
+  /* ---------- 管理页 ---------- */
+  .topbar {
+    background: #1e3a5f; color: #fff; display: flex; align-items: center;
+    justify-content: space-between; padding: 12px 24px;
+  }
+  .topbar .brand { font-size: 16px; font-weight: 600; }
+  .topbar .user { font-size: 13px; opacity: .9; cursor: pointer; }
+  .topbar .user:hover { opacity: 1; text-decoration: underline; }
+  .container { max-width: 1280px; margin: 20px auto; padding: 0 16px; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .toolbar .count { color: #6b7280; font-size: 13px; }
+  .btn {
+    padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer;
+  }
+  .btn-primary { background: #2f6fed; color: #fff; }
+  .btn-primary:hover { background: #265fd6; }
+  .btn-ghost { background: #fff; color: #444; border: 1px solid #d4d9e0; }
+  .btn-ghost:hover { background: #f0f3f8; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 4px; }
+  .btn-edit { background: #e8f0fe; color: #2f6fed; }
+  .btn-edit:hover { background: #d7e5fd; }
+  .btn-del { background: #fdeaea; color: #d93025; }
+  .btn-del:hover { background: #fbd5d5; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  thead th {
+    background: #eef2f7; color: #445; font-weight: 600; text-align: left;
+    padding: 11px 10px; font-size: 13px; border-bottom: 1px solid #e3e8ef; white-space: nowrap;
+  }
+  tbody td { padding: 10px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
+  tbody tr:hover { background: #f8fafd; }
+  .step-cell { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .coord { font-family: Consolas, monospace; font-size: 12px; color: #667; white-space: nowrap; }
+  .empty-row td { text-align: center; color: #9aa3b2; padding: 40px 10px; }
+
+  /* ---------- 弹窗 ---------- */
+  .mask { position: fixed; inset: 0; background: rgba(20,30,50,.45); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal { background: #fff; border-radius: 10px; width: 640px; max-height: 92vh; overflow: auto; padding: 24px 28px; }
+  .modal h2 { font-size: 17px; color: #1e3a5f; margin-bottom: 18px; }
+  .form-row { margin-bottom: 14px; }
+  .form-row label { display: block; font-size: 13px; color: #555; margin-bottom: 5px; }
+  .form-row label .tip { color: #9aa3b2; font-weight: normal; }
+  .form-row input[type=text], .form-row textarea {
+    width: 100%; padding: 9px 11px; border: 1px solid #d4d9e0; border-radius: 6px; font-size: 14px; outline: none;
+  }
+  .form-row input:focus, .form-row textarea:focus { border-color: #2f6fed; box-shadow: 0 0 0 3px rgba(47,111,237,.1); }
+  .form-row textarea { resize: vertical; min-height: 64px; }
+  .csv-row { display: flex; align-items: center; gap: 10px; }
+  .csv-row input[type=file] { font-size: 13px; }
+  .calc-box {
+    background: #f6f8fb; border: 1px dashed #ccd5e2; border-radius: 6px;
+    padding: 10px 14px; font-size: 13px; color: #445; line-height: 1.8;
+  }
+  .calc-box b { color: #1e3a5f; }
+  .preview-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  .preview-table td { padding: 4px 8px; border-bottom: 1px solid #eef1f5; font-family: Consolas, monospace; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+  .modal-err { color: #d93025; font-size: 13px; min-height: 18px; margin-top: 10px; }
+
+  /* ---------- toast ---------- */
+  .toast {
+    position: fixed; top: 18px; right: 18px; z-index: 100;
+    background: #fff; border-radius: 6px; padding: 10px 16px; font-size: 13px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.16); border-left: 4px solid #2f6fed; max-width: 420px;
+  }
+  .toast.ok { border-left-color: #12b76a; }
+  .toast.err { border-left-color: #d93025; }
+
+  /* ---------- 批量导入 ---------- */
+  .batch-card {
+    margin-top: 20px; background: #fff; border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08); padding: 18px 20px 20px;
+  }
+  .batch-card h3 { font-size: 15px; color: #1e3a5f; margin-bottom: 6px; }
+  .batch-tip { display: block; font-size: 12px; color: #8a94a6; margin-bottom: 12px; line-height: 1.7; }
+  .batch-step { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .batch-label { font-size: 13px; color: #555; font-weight: 600; }
+  .batch-status { font-size: 13px; color: #6b7280; }
+  .batch-errors {
+    background: #fef3f2; border: 1px solid #fbd5d5; border-radius: 6px;
+    padding: 10px 14px; font-size: 12px; color: #b3261e; margin-top: 12px; line-height: 1.8;
+  }
+  .batch-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
+  .batch-table th {
+    background: #eef2f7; color: #445; font-weight: 600; text-align: left;
+    padding: 9px 10px; font-size: 13px; border-bottom: 1px solid #e3e8ef; white-space: nowrap;
+  }
+  .batch-table td { padding: 9px 10px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
+  .batch-table .step-cell { max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .batch-table .toll-cell { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .batch-table input[type=file] { display: none; }
+  .tag-ok { color: #12b76a; font-weight: 600; }
+  .tag-warn { color: #b54708; }
+  .tag-err { color: #d93025; }
+  .tag-muted { color: #9aa3b2; }
+  .csv-file-btn { cursor: pointer; }
+</style>
+</head>
+<body data-api="{{ api_base }}">
+
+<!-- ==================== 登录页 ==================== -->
+<div id="loginView">
+  <div class="login-card">
+    <h1>固定路线管理控制台</h1>
+    <div class="sub">登录后管理 FixedRoute 固定路线数据</div>
+    <label>用户名</label>
+    <input id="loginUser" type="text" autocomplete="username" placeholder="admin">
+    <label>密码</label>
+    <input id="loginPass" type="password" autocomplete="current-password" placeholder="请输入密码">
+    <button class="login-btn" id="loginBtn">登 录</button>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- ==================== 管理页 ==================== -->
+<div id="appView" class="hidden">
+  <div class="topbar">
+    <div class="brand">固定路线管理控制台</div>
+    <div class="user" id="userInfo" title="点击退出登录"></div>
+  </div>
+  <div class="container">
+    <div class="toolbar">
+      <span class="count" id="rowCount"></span>
+      <div>
+        <button class="btn btn-ghost" id="refreshBtn" style="margin-right:8px;">刷新</button>
+        <button class="btn btn-primary" id="addBtn">＋ 新增固定路线</button>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:56px;">序号</th>
+          <th>起点</th>
+          <th>终点</th>
+          <th>起点坐标</th>
+          <th>终点坐标</th>
+          <th style="width:70px;">坐标数</th>
+          <th>固定段线路</th>
+          <th style="width:150px;">更新时间</th>
+          <th style="width:120px;">操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+
+    <!-- ==================== 批量导入 ==================== -->
+    <div class="batch-card">
+      <h3>批量导入（总表 Excel → 逐条导入 CSV 入库）</h3>
+      <span class="batch-tip">
+        流程：① 上传包含「固定段路线文本」「收费站经纬度」两列的总表 Excel，自动列出每一行
+        （首段=起点、末段=终点，中间以 - 分割）；② 对每一行选择对应的 CSV 文件；
+        ③ 服务端校验 CSV 中是否有坐标点与总表「收费站经纬度」一致（容差约 0.0002° ≈ 20 米）后入库，
+        库中已有相同起点+终点则覆盖。
+      </span>
+      <div class="batch-step">
+        <span class="batch-label">第 1 步：</span>
+        <input type="file" id="batchExcelFile" accept=".xlsx">
+        <button class="btn btn-primary btn-sm" id="batchParseBtn">解析总表</button>
+        <span class="batch-status" id="batchParseStatus"></span>
+      </div>
+      <div id="batchErrors" class="batch-errors hidden"></div>
+      <div id="batchRowsWrap" class="hidden">
+        <table class="batch-table">
+          <thead>
+            <tr>
+              <th style="width:48px;">序号</th>
+              <th>起点</th>
+              <th>终点</th>
+              <th>固定段路线文本</th>
+              <th>收费站经纬度（校验用）</th>
+              <th>状态</th>
+              <th style="width:140px;">第 2 步：导入 CSV</th>
+            </tr>
+          </thead>
+          <tbody id="batchTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 新增/编辑弹窗 ==================== -->
+<div id="modalMask" class="mask hidden">
+  <div class="modal">
+    <h2 id="modalTitle">新增固定路线</h2>
+
+    <div class="form-row">
+      <label>起点名称 <span class="tip">start_name · 手动输入</span></label>
+      <input type="text" id="fStartName" placeholder="例如：扎下镇">
+    </div>
+    <div class="form-row">
+      <label>目标收费站 <span class="tip">end_name · 手动输入</span></label>
+      <input type="text" id="fEndName" placeholder="例如：江苏沭阳北收费站">
+    </div>
+    <div class="form-row">
+      <label>固定段线路文本 <span class="tip">fixed_step · 手动输入，路段之间用 -- 分隔</span></label>
+      <textarea id="fFixedStep" placeholder="例如：扎下镇--运河路--玉龙南路--龙城大道--江苏沭阳北收费站"></textarea>
+    </div>
+    <div class="form-row">
+      <label>固定段线路坐标 <span class="tip">fixed_points · 从 CSV 文件导入（X,Y 表头，每行 经度,纬度）</span></label>
+      <div class="csv-row">
+        <input type="file" id="fCsv" accept=".csv,.txt">
+        <span id="csvStatus" style="font-size:13px;color:#6b7280;">未选择文件</span>
+      </div>
+      <div class="calc-box" style="margin-top:10px;">
+        <div><b>起点坐标</b>（自动取第一个坐标）：<span id="calcStart">-</span></div>
+        <div><b>终点坐标</b>（自动取最后一个坐标）：<span id="calcEnd">-</span></div>
+        <div><b>坐标点数</b>：<span id="calcCount">0</span></div>
+      </div>
+      <table class="preview-table hidden" id="previewTable"></table>
+    </div>
+
+    <div class="modal-err" id="modalErr"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cancelBtn">取 消</button>
+      <button class="btn btn-primary" id="saveBtn">保 存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var API = (document.body.getAttribute("data-api") || "/api/v1").replace(/\/$/, "");
+  var token = localStorage.getItem("fc_admin_token") || "";
+  var editingId = null;      // null=新增，数字=编辑
+  var currentCoords = null;  // 弹窗内当前持有的坐标数组
+  var originalCoords = null; // 编辑模式下数据库原坐标（未重新导入时保持）
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* ---------------- 公共工具 ---------------- */
+  function toast(msg, type) {
+    var t = document.createElement("div");
+    t.className = "toast " + (type || "ok");
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function () { t.remove(); }, 2600);
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function fmtCoord(p) {
+    if (!p || p.length < 2) return "-";
+    return p[0].toFixed(6) + ", " + p[1].toFixed(6);
+  }
+
+  /* ---------------- 视图切换 ---------------- */
+  function showLogin() {
+    $("appView").classList.add("hidden");
+    $("loginView").classList.remove("hidden");
+  }
+  function showApp() {
+    $("loginView").classList.add("hidden");
+    $("appView").classList.remove("hidden");
+    $("userInfo").textContent = "当前用户：" + (localStorage.getItem("fc_admin_user") || "admin") + "（退出）";
+    loadList();
+  }
+
+  /* ---------------- 登录 ---------------- */
+  function doLogin() {
+    var username = $("loginUser").value.trim();
+    var password = $("loginPass").value;
+    $("loginErr").textContent = "";
+    if (!username || !password) { $("loginErr").textContent = "请输入用户名和密码"; return; }
+    fetch(API + "/admin/login/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username, password: password })
+    }).then(function (r) {
+      return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+    }).then(function (res) {
+      if (res.ok) {
+        token = res.body.token;
+        localStorage.setItem("fc_admin_token", token);
+        localStorage.setItem("fc_admin_user", res.body.username);
+        showApp();
+      } else {
+        $("loginErr").textContent = res.body.detail || ("登录失败（" + res.status + "）");
+      }
+    }).catch(function () { $("loginErr").textContent = "网络错误，无法连接服务器"; });
+  }
+
+  function logout() {
+    token = "";
+    localStorage.removeItem("fc_admin_token");
+    localStorage.removeItem("fc_admin_user");
+    showLogin();
+  }
+
+  /* ---------------- API 封装 ---------------- */
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({}, opts.headers || {}, {
+      "Authorization": "Token " + token,
+      "Content-Type": "application/json"
+    });
+    return fetch(API + path, opts).then(function (r) {
+      return r.json().then(function (j) {
+        if (r.status === 401) {
+          toast("登录已过期，请重新登录", "err");
+          logout();
+          throw new Error("401");
+        }
+        return { ok: r.ok, status: r.status, body: j };
+      });
+    });
+  }
+
+  /* ---------------- 列表 ---------------- */
+  function loadList() {
+    api("/fixed-routes/manage/").then(function (res) {
+      if (!res.ok) { toast(res.body.detail || "加载失败", "err"); return; }
+      renderList(res.body);
+    }).catch(function () {});
+  }
+
+  function renderList(rows) {
+    var tb = $("tbody");
+    $("rowCount").textContent = "共 " + rows.length + " 条固定路线";
+    if (!rows.length) {
+      tb.innerHTML = '<tr class="empty-row"><td colspan="9">暂无数据，点击右上角「新增固定路线」添加</td></tr>';
+      return;
+    }
+    var html = "";
+    rows.forEach(function (r, i) {
+      var n = (r.fixed_points && r.fixed_points.coordinates) ? r.fixed_points.coordinates.length : 0;
+      html += "<tr>" +
+        "<td>" + (i + 1) + "</td>" +
+        "<td>" + esc(r.start_name) + "</td>" +
+        "<td>" + esc(r.end_name) + "</td>" +
+        '<td class="coord">' + fmtCoord(r.start_point) + "</td>" +
+        '<td class="coord">' + fmtCoord(r.end_point) + "</td>" +
+        "<td>" + n + "</td>" +
+        '<td class="step-cell" title="' + esc(r.fixed_step) + '">' + esc(r.fixed_step) + "</td>" +
+        '<td class="coord">' + esc((r.updated_at || "").replace("T", " ").slice(0, 19)) + "</td>" +
+        "<td>" +
+          '<button class="btn btn-sm btn-edit" data-act="edit" data-id="' + r.id + '">编辑</button> ' +
+          '<button class="btn btn-sm btn-del" data-act="del" data-id="' + r.id + '">删除</button>' +
+        "</td>" +
+      "</tr>";
+    });
+    tb.innerHTML = html;
+  }
+
+  $("tbody").addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (!btn) return;
+    var id = btn.getAttribute("data-id");
+    if (btn.getAttribute("data-act") === "edit") openEdit(id);
+    else if (btn.getAttribute("data-act") === "del") doDelete(id);
+  });
+
+  /* ---------------- 弹窗 ---------------- */
+  function openModal(title) {
+    $("modalTitle").textContent = title;
+    $("modalErr").textContent = "";
+    $("modalMask").classList.remove("hidden");
+  }
+  function closeModal() {
+    $("modalMask").classList.add("hidden");
+    editingId = null;
+    currentCoords = null;
+    originalCoords = null;
+    $("fCsv").value = "";
+    $("csvStatus").textContent = "未选择文件";
+    $("calcStart").textContent = "-";
+    $("calcEnd").textContent = "-";
+    $("calcCount").textContent = "0";
+    $("previewTable").classList.add("hidden");
+  }
+
+  function openAdd() {
+    editingId = null;
+    $("fStartName").value = "";
+    $("fEndName").value = "";
+    $("fFixedStep").value = "";
+    openModal("新增固定路线");
+    $("fStartName").focus();
+  }
+
+  function openEdit(id) {
+    api("/fixed-routes/manage/").then(function (res) {
+      if (!res.ok) return;
+      var row = res.body.filter(function (r) { return Number(r.id) === Number(id); })[0];
+      if (!row) { toast("记录不存在", "err"); return; }
+      editingId = id;
+      $("fStartName").value = row.start_name;
+      $("fEndName").value = row.end_name;
+      $("fFixedStep").value = row.fixed_step;
+      originalCoords = (row.fixed_points && row.fixed_points.coordinates) || null;
+      currentCoords = null;
+      var n = originalCoords ? originalCoords.length : 0;
+      $("csvStatus").textContent = "当前已存 " + n + " 个坐标点（不重新导入则保持不变）";
+      $("calcStart").textContent = originalCoords ? fmtCoord(originalCoords[0]) : "-";
+      $("calcEnd").textContent = originalCoords ? fmtCoord(originalCoords[originalCoords.length - 1]) : "-";
+      $("calcCount").textContent = n;
+      $("previewTable").classList.add("hidden");
+      openModal("编辑固定路线 #" + id);
+    }).catch(function () {});
+  }
+
+  /* ---------------- CSV 解析与预览 ---------------- */
+  function parseCsv(text) {
+    text = text.replace(/^\uFEFF/, "");
+    var lines = text.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+    var coords = [];
+    for (var i = 0; i < lines.length; i++) {
+      var parts = lines[i].split(/[,\t]/).map(function (s) { return s.trim(); });
+      if (parts.length !== 2) throw new Error("第 " + (i + 1) + " 行格式错误（应为 经度,纬度）：" + lines[i]);
+      var x = parts[0].toLowerCase(), y = parts[1].toLowerCase();
+      if (["x", "lng", "lon", "longitude", "经度"].indexOf(x) >= 0 &&
+          ["y", "lat", "latitude", "纬度"].indexOf(y) >= 0) continue; // 跳过表头
+      var lng = Number(parts[0]), lat = Number(parts[1]);
+      if (isNaN(lng) || isNaN(lat)) throw new Error("第 " + (i + 1) + " 行坐标非数字：" + lines[i]);
+      if (lng < -180 || lng > 180 || lat < -90 || lat > 90) throw new Error("第 " + (i + 1) + " 行坐标超出范围：" + lines[i]);
+      coords.push([lng, lat]);
+    }
+    if (coords.length < 2) throw new Error("至少需要 2 个坐标点");
+    return coords;
+  }
+
+  $("fCsv").addEventListener("change", function () {
+    var file = this.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      try {
+        currentCoords = parseCsv(ev.target.result);
+        $("csvStatus").textContent = "已解析 " + currentCoords.length + " 个坐标点";
+        $("calcStart").textContent = fmtCoord(currentCoords[0]);
+        $("calcEnd").textContent = fmtCoord(currentCoords[currentCoords.length - 1]);
+        $("calcCount").textContent = currentCoords.length;
+        renderPreview(currentCoords);
+      } catch (e) {
+        currentCoords = null;
+        $("csvStatus").textContent = "解析失败：" + e.message;
+        $("modalErr").textContent = "CSV 解析失败：" + e.message;
+      }
+    };
+    reader.readAsText(file, "utf-8");
+  });
+
+  function renderPreview(coords) {
+    var tb = $("previewTable");
+    var rows = coords.slice(0, 6).map(function (c) {
+      return "<tr><td>" + c[0].toFixed(6) + "</td><td>" + c[1].toFixed(6) + "</td></tr>";
+    }).join("");
+    var more = coords.length > 6 ? '<tr><td colspan="2">… 共 ' + coords.length + " 个点</td></tr>" : "";
+    tb.innerHTML = "<tr><td>经度(X)</td><td>纬度(Y)</td></tr>" + rows + more;
+    tb.classList.remove("hidden");
+  }
+
+  /* ---------------- 保存 / 删除 ---------------- */
+  function doSave() {
+    var start_name = $("fStartName").value.trim();
+    var end_name = $("fEndName").value.trim();
+    var fixed_step = $("fFixedStep").value.trim();
+    $("modalErr").textContent = "";
+    if (!start_name) { $("modalErr").textContent = "请填写起点名称"; return; }
+    if (!end_name) { $("modalErr").textContent = "请填写目标收费站"; return; }
+    if (!fixed_step) { $("modalErr").textContent = "请填写固定段线路文本"; return; }
+
+    var payload = { start_name: start_name, end_name: end_name, fixed_step: fixed_step };
+    if (editingId === null) {
+      // 新增：必须导入 CSV
+      if (!currentCoords) { $("modalErr").textContent = "请先选择并导入 CSV 坐标文件"; return; }
+      payload.fixed_points = { type: "LineString", coordinates: currentCoords };
+    } else if (currentCoords) {
+      // 编辑：重新导入了 CSV 才更新坐标
+      payload.fixed_points = { type: "LineString", coordinates: currentCoords };
+    }
+
+    var url = editingId === null ? "/fixed-routes/manage/" : "/fixed-routes/manage/" + editingId + "/";
+    var method = editingId === null ? "POST" : "PUT";
+    api(url, { method: method, body: JSON.stringify(payload) }).then(function (res) {
+      if (res.ok) {
+        toast(editingId === null ? "新增成功（起终点坐标已自动从 CSV 首尾坐标生成）" : "修改成功", "ok");
+        closeModal();
+        loadList();
+      } else {
+        $("modalErr").textContent = res.body.detail || ("保存失败（" + res.status + "）");
+      }
+    }).catch(function () {});
+  }
+
+  function doDelete(id) {
+    api("/fixed-routes/manage/").then(function (res) {
+      if (!res.ok) return;
+      var row = res.body.filter(function (r) { return Number(r.id) === Number(id); })[0];
+      var label = row ? (row.start_name + " → " + row.end_name) : ("#" + id);
+      if (!window.confirm("确定删除固定路线「" + label + "」？")) return;
+      api("/fixed-routes/manage/" + id + "/", { method: "DELETE" }).then(function (r2) {
+        if (r2.ok) { toast("已删除「" + label + "」", "ok"); loadList(); }
+        else toast(r2.body.detail || "删除失败", "err");
+      }).catch(function () {});
+    }).catch(function () {});
+  }
+
+  /* ---------------- 批量导入 ---------------- */
+  function uploadExcel() {
+    var file = $("batchExcelFile").files[0];
+    if (!file) { toast("请先选择总表 Excel 文件（.xlsx）", "err"); return; }
+    var fd = new FormData();
+    fd.append("file", file);
+    $("batchParseStatus").textContent = "解析中…";
+    $("batchErrors").classList.add("hidden");
+    fetch(API + "/fixed-routes/batch/excel/", {
+      method: "POST",
+      headers: { "Authorization": "Token " + token },
+      body: fd
+    }).then(function (r) {
+      return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+    }).then(function (res) {
+      $("batchParseStatus").textContent = "";
+      if (!res.ok) { toast(res.body.detail || "解析失败", "err"); return; }
+      renderBatchRows(res.body);
+    }).catch(function () { $("batchParseStatus").textContent = ""; toast("网络错误，无法连接服务器", "err"); });
+  }
+
+  function batchStatusHtml(r) {
+    if (!r.toll_point) return '<span class="tag-warn">缺收费站经纬度</span>';
+    if (r.exists) return '<span class="tag-warn">库中已存在（导入将覆盖）</span>';
+    return '<span class="tag-muted">待导入（新记录）</span>';
+  }
+
+  function renderBatchRows(body) {
+    var rows = body.rows || [];
+    var errs = body.errors || [];
+    if (!rows.length && !errs.length) {
+      toast("总表「固定段路线文本」列没有数据", "err");
+      return;
+    }
+    var tb = $("batchTbody");
+    var html = "";
+    rows.forEach(function (r, i) {
+      var toll = r.toll_point ? fmtCoord(r.toll_point) : "";
+      html +=
+        '<tr id="batchRow-' + i + '">' +
+          "<td>" + (i + 1) + "</td>" +
+          "<td>" + esc(r.start_name) + "</td>" +
+          "<td>" + esc(r.end_name) + "</td>" +
+          '<td class="step-cell" title="' + esc(r.fixed_step) + '">' + esc(r.fixed_step) + "</td>" +
+          '<td class="toll-cell coord" title="' + esc(toll) + '">' + (toll ? esc(toll) : '<span class="tag-warn">未解析</span>') + "</td>" +
+          '<td id="batchStatus-' + i + '">' + batchStatusHtml(r) + "</td>" +
+          "<td>" +
+            (r.toll_point
+              ? '<label class="btn btn-sm btn-edit csv-file-btn">导入CSV' +
+                  '<input type="file" accept=".csv,.txt" data-bidx="' + i + '"' +
+                  ' data-start="' + esc(r.start_name) + '" data-end="' + esc(r.end_name) + '"' +
+                  ' data-step="' + esc(r.fixed_step) + '" data-toll="' + esc(r.toll_point.join(",")) + '">' +
+                "</label>"
+              : '<span class="tag-warn">无法导入</span>') +
+          "</td>" +
+        "</tr>";
+    });
+    tb.innerHTML = html;
+    $("batchRowsWrap").classList.remove("hidden");
+
+    if (errs.length) {
+      $("batchErrors").innerHTML =
+        "<b>以下行无法切分出起点/终点（已跳过，未列出）：</b><br>" +
+        errs.map(function (e) {
+          return "行 " + (e.row || "?") + "：<code>" + esc(e.text) + "</code> —— " + esc(e.reason);
+        }).join("<br>");
+      $("batchErrors").classList.remove("hidden");
+    } else {
+      $("batchErrors").classList.add("hidden");
+    }
+    $("batchParseStatus").textContent = "共解析出 " + rows.length + " 行";
+  }
+
+  function importCsvForRow(input) {
+    var file = input.files[0];
+    if (!file) return;
+    var idx = input.getAttribute("data-bidx");
+    var payload = {
+      start_name: input.getAttribute("data-start"),
+      end_name: input.getAttribute("data-end"),
+      fixed_step: input.getAttribute("data-step"),
+      toll_point: (input.getAttribute("data-toll") || "").split(",").map(Number),
+      csv: ""
+    };
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      payload.csv = ev.target.result;
+      var cell = $("batchStatus-" + idx);
+      if (cell) cell.innerHTML = '<span class="tag-muted">校验中…</span>';
+      api("/fixed-routes/batch/csv/", { method: "POST", body: JSON.stringify(payload) })
+        .then(function (res) {
+          if (cell) {
+            if (res.ok) {
+              var act = res.body.action === "update" ? "已覆盖库中已有记录" : "已新增入库";
+              cell.innerHTML = '<span class="tag-ok">' + act + '</span>';
+              toast(res.body.detail + "（偏差 " + res.body.deviation + "°）", "ok");
+              loadList();
+            } else {
+              cell.innerHTML = '<span class="tag-err">未入库：' + esc(res.body.detail || "失败") + '</span>';
+              toast(res.body.detail || "导入失败", "err");
+            }
+          }
+        })
+        .catch(function () {});
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  /* ---------------- 事件绑定 ---------------- */
+  $("loginBtn").addEventListener("click", doLogin);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !$("loginView").classList.contains("hidden") &&
+        document.activeElement.id !== "saveBtn") doLogin();
+  });
+  $("userInfo").addEventListener("click", logout);
+  $("refreshBtn").addEventListener("click", loadList);
+  $("addBtn").addEventListener("click", openAdd);
+  $("cancelBtn").addEventListener("click", closeModal);
+  $("saveBtn").addEventListener("click", doSave);
+  $("batchParseBtn").addEventListener("click", uploadExcel);
+  $("batchTbody").addEventListener("change", function (e) {
+    var input = e.target.closest("input[data-bidx]");
+    if (input) importCsvForRow(input);
+  });
+
+  /* ---------------- 启动 ---------------- */
+  if (token) { showApp(); } else { showLogin(); }
+})();
+</script>
+</body>
+</html>

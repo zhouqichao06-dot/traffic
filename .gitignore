@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+
+# Django
+db.sqlite3
+staticfiles/
+media/
+
+# 环境配置（含密钥与 Token，绝不入库）
+.env
+.env.*
+
+# 日志（可能含请求/错误信息）
+*.log
+*.err
+
+# 编辑器/系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
