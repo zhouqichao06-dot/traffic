@@ -8,6 +8,11 @@ from rest_framework.response import Response
 from .models import FixedRoute
 
 
+#: 坐标一致性容差（度），与批量导入 BATCH_COORD_TOL 保持一致（约 0.0002° ≈ 20 米）。
+#: 用于判断数据库记录起点/终点坐标是否包含在请求 points 中时，允许来源间的取整差异。
+COORD_MATCH_TOL = 0.0002
+
+
 # ---------------------------------------------------------------- 基础接口
 
 @api_view(["GET"])
@@ -73,12 +78,16 @@ def _find_point_index(coords, target, tol=1e-5):
     return best
 
 
-def _match_routes(step_tokens):
-    """拿 step 分段列表去匹配数据库中的固定路线记录。
+def _match_routes(step_tokens, coords=None, tol=COORD_MATCH_TOL):
+    """拿 step 分段列表匹配数据库中的固定路线记录。
 
-    匹配条件：记录（start_name, end_name）在 step 分段中按顺序出现
-    （起点在前、终点在后）。返回按起点索引排序、互不重叠的匹配列表：
-    [(s_idx, e_idx, route), ...]
+    匹配条件（全部满足才算命中，任一不满足则跳过该记录）：
+      ① 名称：记录 (start_name, end_name) 在 step 分段中按顺序出现
+         （起点在前、终点在后）；
+      ② 坐标：记录 start_point / end_point 必须**都包含**在请求的 points
+         （coords 坐标序列）中（任一点偏差 ≤ tol 即视为包含）；
+         未提供 coords 时跳过坐标校验（仅按名称匹配）。
+    返回按起点索引排序、互不重叠的匹配列表：[(s_idx, e_idx, route), ...]
     """
     matches = []
     for r in FixedRoute.objects.all():
@@ -89,6 +98,12 @@ def _match_routes(step_tokens):
         if e_name not in step_tokens[s + 1:]:
             continue
         e = s + 1 + step_tokens[s + 1:].index(e_name)
+        # ② 坐标包含校验：起点与终点坐标都必须包含在 points 中，全部符合才替换
+        if coords is not None:
+            if not _point_contained(coords, r.start_point, tol):
+                continue
+            if not _point_contained(coords, r.end_point, tol):
+                continue
         matches.append((s, e, r))
 
     # 去重叠：按起点排序，起点位于已保留段终点之后才保留
@@ -98,6 +113,35 @@ def _match_routes(step_tokens):
         if not kept or m[0] > kept[-1][1]:
             kept.append(m)
     return kept
+
+
+def _coord_distance(a, b):
+    """两点欧氏距离；任一点含非法坐标时返回 None。"""
+    try:
+        a_lng, a_lat = float(a[0]), float(a[1])
+        b_lng, b_lat = float(b[0]), float(b[1])
+    except (TypeError, ValueError):
+        return None
+    return ((a_lng - b_lng) ** 2 + (a_lat - b_lat) ** 2) ** 0.5
+
+
+def _point_contained(coords, target, tol=COORD_MATCH_TOL):
+    """判断 target 坐标（如 [lng, lat]）是否包含在 coords 坐标序列中。
+
+    只要存在任意一个坐标点与 target 偏差 ≤ tol 即视为包含；
+    坐标统一转 float 归一化（去掉无效尾 0），与数据库/请求的取整差异兼容。
+    """
+    if not target or len(target) < 2:
+        return False
+    try:
+        t_lng, t_lat = float(target[0]), float(target[1])
+    except (TypeError, ValueError):
+        return False
+    for c in coords:
+        d = _coord_distance(c, (t_lng, t_lat))
+        if d is not None and d <= tol:
+            return True
+    return False
 
 
 def _index_in(tokens, name, start):
@@ -171,7 +215,9 @@ def _apply_fixed_routes(payload):
     """请求体（原始路线数据）→ 匹配数据库固定路线 → 替换 originalStep / points。
 
     规则：
-      ① 从 step 分段中匹配数据库 fixed_route 记录（start_name 在前、end_name 在后）；
+      ① 从 step 分段中匹配数据库 fixed_route 记录：先按名称（start_name 在前、
+         end_name 在后），再校验记录的起点/终点坐标都包含在请求 points 中，
+         全部符合才替换；
       ② step / originalStep / uploadStep 处理一致：匹配到的『起点…终点』段
          在各字段中整段替换为 fixed_step（请求中不存在的字段不新增）；
       ③ 匹配段坐标整体替换为 fixed_points.coordinates；
@@ -189,7 +235,7 @@ def _apply_fixed_routes(payload):
     if not step or not original_coords:
         return {"code": 400, "detail": "缺少原始路线：需要 step（或 originalStep）与 points.coordinates"}
 
-    matches = _match_routes(_split_step(step))
+    matches = _match_routes(_split_step(step), original_coords)
     if not matches:
         # 没有匹配到任何固定路线：原样返回，iscsdl=0
         result = dict(route)

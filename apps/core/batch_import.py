@@ -244,22 +244,37 @@ def find_matching_point(csv_coords, toll_point, tol=BATCH_COORD_TOL):
     规则：只要 CSV 中存在**任意一个**坐标点与 toll_point 偏差 ≤ tol 即视为一致。
     匹配前坐标统一转 float 归一化（去掉无效尾 0），数据库中的 119.872940 与
     119.87294 视为同一坐标。
-    返回 (matched_point, min_deviation)：matched_point 为命中的坐标点（无匹配为 None），
-    min_deviation 为全序列中的最小偏差。
+    返回 (matched_index, matched_point, min_deviation)：
+        matched_index 为命中的坐标点在序列中的下标（无匹配为 None），
+        matched_point 为命中的坐标点（无匹配为 None），
+        min_deviation 为全序列中的最小偏差。
     """
     if not toll_point or len(toll_point) < 2:
-        return None, None
+        return None, None, None
     toll = [normalize_coord(toll_point[0]), normalize_coord(toll_point[1])]
     if None in toll:
-        return None, None
-    best_pt, best_dev = None, None
-    for c in csv_coords:
+        return None, None, None
+    best_idx, best_pt, best_dev = None, None, None
+    for i, c in enumerate(csv_coords):
         dev = coord_distance(c, toll)
         if dev is None:
             continue
         if best_dev is None or dev < best_dev:
             best_dev = dev
+            best_idx = i
             best_pt = c
         if dev <= tol:
-            return c, round(dev, 6)
-    return None, (round(best_dev, 6) if best_dev is not None else None)
+            return i, c, round(dev, 6)
+    return None, None, (round(best_dev, 6) if best_dev is not None else None)
+
+
+def trim_to_toll(csv_coords, matched_index):
+    """入库前截断：只保留『起点 → 收费站』的坐标（含收费站点）。
+
+    matched_index 为 find_matching_point 命中的收费站坐标下标；
+    返回 csv_coords[:matched_index + 1]，即把收费站经纬度后面的坐标全部去掉。
+    下标非法（None / 越界）时按原样返回整条序列，由调用方自行处理。
+    """
+    if matched_index is None or matched_index < 0 or matched_index >= len(csv_coords):
+        return list(csv_coords)
+    return [list(c) for c in csv_coords[:matched_index + 1]]

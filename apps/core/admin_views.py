@@ -19,7 +19,9 @@
     ① 上传含「固定段路线文本」「收费站经纬度」两列的总表 Excel，
        解析后列出每行（起点=文本首段，终点=文本末段，收费站经纬度用于校验）；
     ② 逐行上传对应 CSV，服务端校验 CSV 坐标序列中是否存在与总表收费站经纬度
-       一致的坐标点（容差 BATCH_COORD_TOL 度）后，按 (start_name, end_name) 新增或覆盖入库。
+       一致的坐标点（容差 BATCH_COORD_TOL 度）后，按 (start_name, end_name)
+       新增或覆盖入库；入库坐标截断为『起点 → 收费站』（含收费站点），
+       收费站经纬度后面的坐标全部去掉。
 """
 from django.conf import settings
 from django.shortcuts import render
@@ -34,6 +36,7 @@ from .batch_import import (
     parse_csv_coords as _parse_csv_coords_batch,
     parse_excel_rows,
     split_step_text,
+    trim_to_toll,
 )
 from .models import FixedRoute
 
@@ -305,7 +308,8 @@ def fixed_route_batch_csv(request):
 
     校验规则：CSV 坐标序列中只要有**任意一个**坐标点与 toll_point 一致
     （偏差 ≤ BATCH_COORD_TOL 度）即视为匹配，否则拒绝入库（400）；
-    匹配则按 (start_name, end_name) 新增或覆盖。
+    匹配则按 (start_name, end_name) 新增或覆盖，入库坐标截断为
+    『起点 → 收费站』（收费站经纬度后面的坐标全部去掉）。
     """
     data = request.data if isinstance(request.data, dict) else {}
     start_name = (data.get("start_name") or "").strip()
@@ -335,7 +339,6 @@ def fixed_route_batch_csv(request):
     except ValueError as e:
         return Response({"detail": "CSV 解析失败：%s" % e}, status=status.HTTP_400_BAD_REQUEST)
 
-    last = coords[-1]
     if not (isinstance(toll_raw, (list, tuple)) and len(toll_raw) >= 2):
         return Response(
             {
@@ -344,8 +347,8 @@ def fixed_route_batch_csv(request):
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
-    matched_pt, dev = find_matching_point(coords, toll_raw)
-    if matched_pt is None:
+    matched_idx, matched_pt, dev = find_matching_point(coords, toll_raw)
+    if matched_idx is None:
         return Response(
             {
                 "detail": (
@@ -353,7 +356,7 @@ def fixed_route_batch_csv(request):
                     "请确认选择的 CSV 与这一行对应。" % (dev, BATCH_COORD_TOL)
                 ),
                 "code": "COORD_MISMATCH",
-                "last_point": last,
+                "last_point": coords[-1],
                 "nearest_point": None,
                 "toll_point": [float(toll_raw[0]), float(toll_raw[1])],
                 "deviation": dev,
@@ -361,14 +364,16 @@ def fixed_route_batch_csv(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # 入库坐标截断：只保留『起点 → 收费站』（含收费站点），收费站后面的坐标去掉
+    trimmed = trim_to_toll(coords, matched_idx)
     r, created = FixedRoute.objects.update_or_create(
         start_name=start_name,
         end_name=end_name,
         defaults={
-            "start_point": coords[0],
-            "end_point": last,
+            "start_point": trimmed[0],
+            "end_point": trimmed[-1],
             "fixed_step": fixed_step,
-            "fixed_points": {"type": "LineString", "coordinates": coords},
+            "fixed_points": {"type": "LineString", "coordinates": trimmed},
         },
     )
     return Response(
@@ -377,9 +382,10 @@ def fixed_route_batch_csv(request):
             "detail": "已新增入库" if created else "已覆盖数据库已有记录",
             "record": _serialize(r),
             "matched_point": matched_pt,
-            "last_point": last,
+            "last_point": trimmed[-1],
             "toll_point": [float(toll_raw[0]), float(toll_raw[1])],
             "deviation": dev,
+            "trimmed": len(coords) - len(trimmed),  # 被去掉的收费站后坐标点数
         },
         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
     )
