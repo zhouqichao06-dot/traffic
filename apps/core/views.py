@@ -8,9 +8,11 @@ from rest_framework.response import Response
 from .models import FixedRoute
 
 
-#: 坐标一致性容差（度），与批量导入 BATCH_COORD_TOL 保持一致（约 0.0002° ≈ 20 米）。
-#: 用于判断数据库记录起点/终点坐标是否包含在请求 points 中时，允许来源间的取整差异。
-COORD_MATCH_TOL = 0.0002
+#: 坐标一致性容差（度）。fixed-routes 的起点/终点坐标"包含"校验为**精确匹配**：
+#: 坐标统一转 float 归一化（去尾 0）后完全相等（或偏差 ≤ 1e-9°）才视为包含，
+#: 避免近似点（如 31.8560155 vs 31.856055）被误判为同一个点。
+#: 注意：批量导入的收费站校验另有 BATCH_COORD_TOL=0.0002 的宽松容差，此处不沿用。
+COORD_MATCH_TOL = 1e-9
 
 
 # ---------------------------------------------------------------- 基础接口
@@ -84,8 +86,9 @@ def _match_routes(step_tokens, coords=None, tol=COORD_MATCH_TOL):
     匹配条件（全部满足才算命中，任一不满足则跳过该记录）：
       ① 名称：记录 (start_name, end_name) 在 step 分段中按顺序出现
          （起点在前、终点在后）；
-      ② 坐标：记录 start_point / end_point 必须**都包含**在请求的 points
-         （coords 坐标序列）中（任一点偏差 ≤ tol 即视为包含）；
+      ② 坐标：记录 start_point / end_point 必须**都精确包含**在请求的 points
+         （coords 坐标序列）中（坐标去尾 0 归一化后完全相等才算包含，
+         容差 1e-9°；近似点不视为包含）；
          未提供 coords 时跳过坐标校验（仅按名称匹配）。
     返回按起点索引排序、互不重叠的匹配列表：[(s_idx, e_idx, route), ...]
     """
@@ -128,8 +131,9 @@ def _coord_distance(a, b):
 def _point_contained(coords, target, tol=COORD_MATCH_TOL):
     """判断 target 坐标（如 [lng, lat]）是否包含在 coords 坐标序列中。
 
-    只要存在任意一个坐标点与 target 偏差 ≤ tol 即视为包含；
-    坐标统一转 float 归一化（去掉无效尾 0），与数据库/请求的取整差异兼容。
+    精确匹配：坐标统一转 float 归一化（去掉无效尾 0）后，与序列中某点
+    偏差 ≤ tol（默认 1e-9°，即视为完全相等）才算包含；近似点（如
+    31.8560155 vs 31.856055，偏差 0.00004°）不视为包含。
     """
     if not target or len(target) < 2:
         return False

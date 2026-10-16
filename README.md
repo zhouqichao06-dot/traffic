@@ -124,7 +124,7 @@ X-API-Key: <API_TOKEN>
 
 ## 四、固定路线接口（应用固定路线）
 
-**`POST /api/v1/fixed-routes/`**（需要 Token）—— 接收原始路线数据，拿 `step` 分段去数据库 `fixed_route` 表匹配固定路线。匹配规则：**① 先按名称**（记录 `start_name` 在前、`end_name` 在后）；**② 再校验坐标**——记录的起点坐标与终点坐标必须**都包含**在请求 `points.coordinates` 中（任一点偏差 ≤ 0.0002° 即视为包含），**全部符合才替换**；匹配到则 `step` / `originalStep` / `uploadStep` 中的「起点…终点」段统一替换为数据库 `fixed_step`，`points` 坐标段整体替换为 `fixed_points.coordinates`，并追加 `fixedStep` / `fixedPoints`（匹配到的固定线路点位与坐标）与匹配标记 `iscsdl`（=1）；未匹配则原样返回（`iscsdl=0`）。
+**`POST /api/v1/fixed-routes/`**（需要 Token）—— 接收原始路线数据，拿 `step` 分段去数据库 `fixed_route` 表匹配固定路线。匹配规则：**① 先按名称**（记录 `start_name` 在前、`end_name` 在后）；**② 再校验坐标**——记录的起点坐标与终点坐标必须**都精确包含**在请求 `points.coordinates` 中（坐标去尾 0 归一化后完全相等才算包含，近似点不视为包含），**全部符合才替换**；匹配到则 `step` / `originalStep` / `uploadStep` 中的「起点…终点」段统一替换为数据库 `fixed_step`，`points` 坐标段整体替换为 `fixed_points.coordinates`，并追加 `fixedStep` / `fixedPoints`（匹配到的固定线路点位与坐标）与匹配标记 `iscsdl`（=1）；未匹配则原样返回（`iscsdl=0`）。
 
 ### 输入（仅原始路线，参考 数据.json 结构，字段平铺即可）
 
