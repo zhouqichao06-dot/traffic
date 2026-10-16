@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
-"""批量导入纯逻辑：Excel（总表）解析 + CSV 终点坐标一致性校验。
+"""批量导入纯逻辑：Excel（总表）解析 + CSV 坐标一致性校验。
 
 本模块不依赖 Django/ORM，可独立单测；视图层（admin_views.py）只负责
 取文件、调本模块纯函数、读写数据库。
+
+坐标一致性校验**不允许任何容差**：坐标统一转 float 归一化（去掉无效尾 0，
+数据库中的 119.872940 与 119.87294 视为同一坐标）后，必须**完全相等**
+才算一致；近似点一律不算匹配。
 """
 import io
 import re
 import zipfile
 from xml.etree import ElementTree as ET
-
-#: 终点坐标一致性容差（度）。约 0.0002° ≈ 20 米，用于允许来源间的取整差异。
-BATCH_COORD_TOL = 0.0002
 
 _XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _XLSX_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -238,12 +239,12 @@ def coord_distance(a, b):
     return ((a_lng - b_lng) ** 2 + (a_lat - b_lat) ** 2) ** 0.5
 
 
-def find_matching_point(csv_coords, toll_point, tol=BATCH_COORD_TOL):
-    """在 CSV 坐标序列中查找与总表收费站经纬度一致的坐标点。
+def find_matching_point(csv_coords, toll_point):
+    """在 CSV 坐标序列中查找与总表收费站经纬度完全一致的坐标点。
 
-    规则：只要 CSV 中存在**任意一个**坐标点与 toll_point 偏差 ≤ tol 即视为一致。
-    匹配前坐标统一转 float 归一化（去掉无效尾 0），数据库中的 119.872940 与
-    119.87294 视为同一坐标。
+    规则：只要 CSV 中存在**任意一个**坐标点与 toll_point **完全相等**
+    （去尾 0 归一化后 float 相等，不允许任何容差）即视为一致；近似点
+    （如偏差 0.00004°）一律不算匹配。
     返回 (matched_index, matched_point, min_deviation)：
         matched_index 为命中的坐标点在序列中的下标（无匹配为 None），
         matched_point 为命中的坐标点（无匹配为 None），
@@ -263,7 +264,7 @@ def find_matching_point(csv_coords, toll_point, tol=BATCH_COORD_TOL):
             best_dev = dev
             best_idx = i
             best_pt = c
-        if dev <= tol:
+        if dev == 0.0:  # 完全相等才算一致，不允许容差
             return i, c, round(dev, 6)
     return None, None, (round(best_dev, 6) if best_dev is not None else None)
 

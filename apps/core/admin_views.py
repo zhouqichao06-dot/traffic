@@ -19,9 +19,9 @@
     ① 上传含「固定段路线文本」「收费站经纬度」两列的总表 Excel，
        解析后列出每行（起点=文本首段，终点=文本末段，收费站经纬度用于校验）；
     ② 逐行上传对应 CSV，服务端校验 CSV 坐标序列中是否存在与总表收费站经纬度
-       一致的坐标点（容差 BATCH_COORD_TOL 度）后，按 (start_name, end_name)
-       新增或覆盖入库；入库坐标截断为『起点 → 收费站』（含收费站点），
-       收费站经纬度后面的坐标全部去掉。
+       **完全一致**的坐标点（去尾 0 归一化后相等，不允许任何容差）后，
+       按 (start_name, end_name) 新增或覆盖入库；入库坐标截断为
+       『起点 → 收费站』（含收费站点），收费站经纬度后面的坐标全部去掉。
 """
 from django.conf import settings
 from django.shortcuts import render
@@ -31,7 +31,6 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .batch_import import (
-    BATCH_COORD_TOL,
     find_matching_point,
     parse_csv_coords as _parse_csv_coords_batch,
     parse_excel_rows,
@@ -294,7 +293,7 @@ def fixed_route_batch_excel(request):
         keys = set(FixedRoute.objects.values_list("start_name", "end_name"))
         for r in rows:
             r["exists"] = (r["start_name"], r["end_name"]) in keys
-    return Response({"rows": rows, "errors": errors, "tolerance": BATCH_COORD_TOL})
+    return Response({"rows": rows, "errors": errors, "match_rule": "exact"})
 
 
 @api_view(["POST"])
@@ -306,10 +305,10 @@ def fixed_route_batch_csv(request):
         toll_point    （总表收费站经纬度 [lng, lat]，用于校验）
         csv           （CSV 文本：X,Y 或 longitude,latitude 表头，每行 经度,纬度）
 
-    校验规则：CSV 坐标序列中只要有**任意一个**坐标点与 toll_point 一致
-    （偏差 ≤ BATCH_COORD_TOL 度）即视为匹配，否则拒绝入库（400）；
-    匹配则按 (start_name, end_name) 新增或覆盖，入库坐标截断为
-    『起点 → 收费站』（收费站经纬度后面的坐标全部去掉）。
+    校验规则：CSV 坐标序列中只要有**任意一个**坐标点与 toll_point **完全一致**
+    （去尾 0 归一化后 float 相等，不允许任何容差；近似点不视为一致）
+    即视为匹配，否则拒绝入库（400）；匹配则按 (start_name, end_name)
+    新增或覆盖，入库坐标截断为『起点 → 收费站』（收费站经纬度后面的坐标全部去掉）。
     """
     data = request.data if isinstance(request.data, dict) else {}
     start_name = (data.get("start_name") or "").strip()
@@ -352,8 +351,9 @@ def fixed_route_batch_csv(request):
         return Response(
             {
                 "detail": (
-                    "CSV 中没有任何坐标点与总表收费站经纬度一致（最近偏差 %.6f°，容差 %.6f°），未入库。"
-                    "请确认选择的 CSV 与这一行对应。" % (dev, BATCH_COORD_TOL)
+                    "CSV 中没有任何坐标点与总表收费站经纬度完全一致"
+                    "（最近偏差 %.6f°；不允许容差，近似点不视为一致），未入库。"
+                    "请确认选择的 CSV 与这一行对应。" % dev
                 ),
                 "code": "COORD_MISMATCH",
                 "last_point": coords[-1],

@@ -89,10 +89,12 @@ coords = load_csv(r"泰州\数据\中建钢构江苏有限公司--S356.csv")
 idx, pt, dev = bi.find_matching_point(coords, [119.872815, 31.8559])
 check("中建钢构无点匹配被拒", idx is None and pt is None and dev > 0.3, f"idx={idx} pt={pt} dev={dev}")
 
-# 2.4 容差内一致：常州西电 CSV vs 总表收费站经纬度（差异约0.0002°）
+# 2.4 精确一致：常州西电 CSV 中确实存在与总表收费站经纬度完全相等的点
+#   （CSV idx58 = [119.872815, 31.8559]，与 excel [119.872815, 31.855900] 去尾0后相等）→ 匹配
 coords = load_csv(r"常州\常州西电变压器有限责任公司--江苏龙城大道收费站.csv")
 idx, pt, dev = bi.find_matching_point(coords, [119.872815, 31.855900])
-check("常州西电容差内一致", idx is not None and pt is not None, f"idx={idx} pt={pt} dev={dev}")
+check("常州西电精确一致", idx == 58 and pt == [119.872815, 31.8559] and dev == 0.0,
+      f"idx={idx} pt={pt} dev={dev}")
 
 # 2.5 完全一致的常州东智
 coords = load_csv(r"常州\常州东智变压器有限公司--江苏龙城大道收费站.csv")
@@ -111,7 +113,7 @@ mid_pt = coords[1]  # 第二个点作为收费站坐标
 idx, pt, dev = bi.find_matching_point(coords, mid_pt)
 check("中间点命中放行（末点不同）", idx == 1 and pt == mid_pt and dev == 0.0,
       f"idx={idx} pt={pt} last={coords[-1]} dev={dev}")
-check("末点确实与toll不同", bi.coord_distance(coords[-1], mid_pt) > 0.0002)
+check("末点确实与toll不同", bi.coord_distance(coords[-1], mid_pt) != 0.0)
 
 # 2.8 构造用例：序列中有一个点命中即通过
 coords2 = [[1.0, 1.0], [120.5, 31.5], [3.0, 3.0]]
@@ -119,6 +121,10 @@ idx, pt, dev = bi.find_matching_point(coords2, [120.5, 31.5])
 check("构造命中", idx == 1 and pt == [120.5, 31.5] and dev == 0.0)
 idx, pt, dev = bi.find_matching_point(coords2, [2.0, 2.0])
 check("构造无命中", idx is None and pt is None and dev is not None)
+# 近似点（偏差 0.00004°）不允许容差 → 不匹配
+idx, pt, dev = bi.find_matching_point(coords2, [120.5 + 0.00004, 31.5 + 0.00004])
+check("构造近似点被拒", idx is None and pt is None and dev is not None and dev > 0.0,
+      f"idx={idx} pt={pt} dev={dev}")
 
 # 2.9 归一化：尾0 字符串坐标 → 数值（"119.872940" → 119.87294）
 check("normalize去尾0", bi.normalize_coord("119.872940") == 119.87294)

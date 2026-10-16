@@ -263,9 +263,9 @@ curl -X POST http://<服务器IP>:8000/api/v1/fixed-routes/manage/ \
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/v1/fixed-routes/batch/excel/` | 上传总表 `.xlsx`（multipart，字段名 `file`），解析「固定段路线文本」「收费站经纬度」两列，列出每行（起点=文本首段、终点=文本末段、收费站经纬度用于校验） |
-| POST | `/api/v1/fixed-routes/batch/csv/` | JSON 提交 `start_name / end_name / fixed_step / toll_point / csv`；校验 CSV 坐标序列中存在与 `toll_point` 一致的坐标点（偏差 ≤ 0.0002° ≈ 20 米）后按 `(start_name, end_name)` 新增或覆盖入库；**入库坐标截断为『起点 → 收费站』**（收费站经纬度后面的坐标全部去掉，`end_point` 取收费站坐标） |
+| POST | `/api/v1/fixed-routes/batch/csv/` | JSON 提交 `start_name / end_name / fixed_step / toll_point / csv`；校验 CSV 坐标序列中存在与 `toll_point` **完全一致**的坐标点（去尾 0 归一化后相等，不允许任何容差，近似点不视为一致）后按 `(start_name, end_name)` 新增或覆盖入库；**入库坐标截断为『起点 → 收费站』**（收费站经纬度后面的坐标全部去掉，`end_point` 取收费站坐标） |
 
-批量导入流程：① 上传总表 Excel → ② 列表展示每一行 → ③ 每行选择对应 CSV，服务端校验 CSV 中是否有坐标点与总表「收费站经纬度」一致，一致才入库；无任何坐标点匹配返回 `400`（`code=COORD_MISMATCH`），该行不写入数据库。入库时只保留从起点到收费站的坐标。
+批量导入流程：① 上传总表 Excel → ② 列表展示每一行 → ③ 每行选择对应 CSV，服务端校验 CSV 中是否有坐标点与总表「收费站经纬度」**完全一致**，一致才入库；无任何坐标点完全一致返回 `400`（`code=COORD_MISMATCH`），该行不写入数据库。入库时只保留从起点到收费站的坐标。
 
 ## 六、如何加业务接口（后续）
 

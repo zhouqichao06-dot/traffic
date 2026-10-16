@@ -7,14 +7,6 @@ from rest_framework.response import Response
 
 from .models import FixedRoute
 
-
-#: 坐标一致性容差（度）。fixed-routes 的起点/终点坐标"包含"校验为**精确匹配**：
-#: 坐标统一转 float 归一化（去尾 0）后完全相等（或偏差 ≤ 1e-9°）才视为包含，
-#: 避免近似点（如 31.8560155 vs 31.856055）被误判为同一个点。
-#: 注意：批量导入的收费站校验另有 BATCH_COORD_TOL=0.0002 的宽松容差，此处不沿用。
-COORD_MATCH_TOL = 1e-9
-
-
 # ---------------------------------------------------------------- 基础接口
 
 @api_view(["GET"])
@@ -54,11 +46,12 @@ def _split_step(step):
     return [t for t in step.replace("--", "-").split("-") if t]
 
 
-def _find_point_index(coords, target, tol=1e-5):
-    """在坐标列表中查找目标点索引：先精确匹配（容差 tol），再取欧氏距离最近点。
+def _find_point_index(coords, target):
+    """在坐标列表中查找与目标点**完全一致**的索引；不存在返回 None。
 
-    匹配前坐标统一转 float 归一化（去掉无效尾 0），因此数据库中存储的
-    119.872940 与请求坐标中的 119.87294 视为同一坐标。
+    不允许任何容差：坐标统一转 float 归一化（去掉无效尾 0）后必须相等，
+    数据库中存储的 119.872940 与请求坐标中的 119.87294 视为同一坐标；
+    近似点（如偏差 0.00004°）一律不算匹配。
     """
     if not target or len(target) != 2:
         return None
@@ -66,30 +59,25 @@ def _find_point_index(coords, target, tol=1e-5):
         t_lng, t_lat = float(target[0]), float(target[1])
     except (TypeError, ValueError):
         return None
-    best, best_dist = None, None
     for i, (lng, lat) in enumerate(coords):
         try:
             lng, lat = float(lng), float(lat)
         except (TypeError, ValueError):
             continue
-        if abs(lng - t_lng) <= tol and abs(lat - t_lat) <= tol:
+        if lng == t_lng and lat == t_lat:
             return i
-        dist = (lng - t_lng) ** 2 + (lat - t_lat) ** 2
-        if best_dist is None or dist < best_dist:
-            best, best_dist = i, dist
-    return best
+    return None
 
 
-def _match_routes(step_tokens, coords=None, tol=COORD_MATCH_TOL):
+def _match_routes(step_tokens, coords=None):
     """拿 step 分段列表匹配数据库中的固定路线记录。
 
     匹配条件（全部满足才算命中，任一不满足则跳过该记录）：
       ① 名称：记录 (start_name, end_name) 在 step 分段中按顺序出现
          （起点在前、终点在后）；
       ② 坐标：记录 start_point / end_point 必须**都精确包含**在请求的 points
-         （coords 坐标序列）中（坐标去尾 0 归一化后完全相等才算包含，
-         容差 1e-9°；近似点不视为包含）；
-         未提供 coords 时跳过坐标校验（仅按名称匹配）。
+         （coords 坐标序列）中（去尾 0 归一化后完全相等，不允许任何容差；
+         近似点不视为包含）；未提供 coords 时跳过坐标校验（仅按名称匹配）。
     返回按起点索引排序、互不重叠的匹配列表：[(s_idx, e_idx, route), ...]
     """
     matches = []
@@ -101,11 +89,11 @@ def _match_routes(step_tokens, coords=None, tol=COORD_MATCH_TOL):
         if e_name not in step_tokens[s + 1:]:
             continue
         e = s + 1 + step_tokens[s + 1:].index(e_name)
-        # ② 坐标包含校验：起点与终点坐标都必须包含在 points 中，全部符合才替换
+        # ② 坐标包含校验：起点与终点坐标都必须精确包含在 points 中，全部符合才替换
         if coords is not None:
-            if not _point_contained(coords, r.start_point, tol):
+            if not _point_contained(coords, r.start_point):
                 continue
-            if not _point_contained(coords, r.end_point, tol):
+            if not _point_contained(coords, r.end_point):
                 continue
         matches.append((s, e, r))
 
@@ -128,24 +116,16 @@ def _coord_distance(a, b):
     return ((a_lng - b_lng) ** 2 + (a_lat - b_lat) ** 2) ** 0.5
 
 
-def _point_contained(coords, target, tol=COORD_MATCH_TOL):
-    """判断 target 坐标（如 [lng, lat]）是否包含在 coords 坐标序列中。
+def _point_contained(coords, target):
+    """判断 target 坐标（如 [lng, lat]）是否精确包含在 coords 坐标序列中。
 
-    精确匹配：坐标统一转 float 归一化（去掉无效尾 0）后，与序列中某点
-    偏差 ≤ tol（默认 1e-9°，即视为完全相等）才算包含；近似点（如
-    31.8560155 vs 31.856055，偏差 0.00004°）不视为包含。
+    不允许任何容差：坐标统一转 float 归一化（去掉无效尾 0）后，与序列中
+    某点完全相等才算包含；近似点（如 31.8560155 vs 31.856055，偏差
+    0.00004°）不视为包含。
     """
     if not target or len(target) < 2:
         return False
-    try:
-        t_lng, t_lat = float(target[0]), float(target[1])
-    except (TypeError, ValueError):
-        return False
-    for c in coords:
-        d = _coord_distance(c, (t_lng, t_lat))
-        if d is not None and d <= tol:
-            return True
-    return False
+    return _find_point_index(coords, target) is not None
 
 
 def _index_in(tokens, name, start):
@@ -195,8 +175,8 @@ def _apply_to_step(step, matches):
 def _apply_to_coords(coords, matches):
     """把坐标列表中匹配段（起点坐标→终点坐标之间的点位）整体替换为 fixed_points.coordinates。
 
-    定位规则：用数据库记录的 start_point / end_point 在原始坐标中查找
-    （精确匹配 ±1e-5，否则取欧氏最近点），该段整体替换。
+    定位规则：用数据库记录的 start_point / end_point 在原始坐标中**精确查找**
+    （去尾 0 归一化后完全相等，不允许任何容差；找不到则跳过该段不替换）。
     多段匹配时从后往前替换，避免索引漂移。
     """
     new_coords = coords
@@ -220,8 +200,8 @@ def _apply_fixed_routes(payload):
 
     规则：
       ① 从 step 分段中匹配数据库 fixed_route 记录：先按名称（start_name 在前、
-         end_name 在后），再校验记录的起点/终点坐标都包含在请求 points 中，
-         全部符合才替换；
+         end_name 在后），再校验记录的起点/终点坐标都**精确包含**在请求
+         points 中（去尾 0 归一化后完全相等，不允许任何容差），全部符合才替换；
       ② step / originalStep / uploadStep 处理一致：匹配到的『起点…终点』段
          在各字段中整段替换为 fixed_step（请求中不存在的字段不新增）；
       ③ 匹配段坐标整体替换为 fixed_points.coordinates；

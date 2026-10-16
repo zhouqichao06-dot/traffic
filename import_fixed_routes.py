@@ -11,7 +11,7 @@
   - fixed_step 内部分隔符统一为 "-"
   - start_point = CSV 首点；end_point = CSV 末点；fixed_points = 全部坐标 GeoJSON LineString
   - 文本↔坐标匹配：起点名称一致且 终点名称一致；终点名称不一致时用「Excel 收费站经纬度」
-    与 CSV 末点坐标比对（容差 0.0002 度）兜底判定
+    与 CSV 末点坐标比对（去尾 0 归一化后完全相等，**不允许任何容差**）兜底判定
   - 匹配不上的：文本行无坐标 / CSV 无文本，单独列出，不导入
 输出：导入报告 固定路线导入报告.md + 控制台摘要
 """
@@ -28,7 +28,6 @@ from xml.etree import ElementTree as ET
 ROOT = r"D:\traffic\traffic_api\固定路线段（文本+坐标）"
 DB_PATH = r"D:\traffic\traffic_api\db.sqlite3"
 REPORT_PATH = r"D:\traffic\traffic_api\固定路线导入报告.md"
-TOL = 0.0002  # 坐标兜底匹配容差（度）
 
 NSM = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NSR = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -182,7 +181,13 @@ def match(text_rows, csv_rows):
     csv_used = set()
 
     def coord_close(a, b):
-        return a and b and abs(a[0] - b[0]) <= TOL and abs(a[1] - b[1]) <= TOL
+        """坐标是否完全一致（不允许任何容差）：去尾 0 归一化后 float 相等。"""
+        if not (a and b):
+            return False
+        try:
+            return float(a[0]) == float(b[0]) and float(a[1]) == float(b[1])
+        except (TypeError, ValueError):
+            return False
 
     for t in text_rows:
         segs = split_step(t["text"])
