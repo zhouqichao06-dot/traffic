@@ -124,100 +124,169 @@ X-API-Key: <API_TOKEN>
 
 ## 四、固定路线接口（应用固定路线）
 
-**`POST /api/v1/fixed-routes/`**（需要 Token）—— 接收原始路线数据，拿 `step` 分段去数据库 `fixed_route` 表匹配固定路线。匹配规则：**① 先按名称**（记录 `start_name` 在前、`end_name` 在后）；**② 再校验坐标**——记录的起点坐标与终点坐标必须**都精确包含**在请求 `points.coordinates` 中（坐标去尾 0 归一化后完全相等才算包含，近似点不视为包含），**全部符合才替换**；匹配到则 `step` / `originalStep` / `uploadStep` 中的「起点…终点」段统一替换为数据库 `fixed_step`，`points` 坐标段整体替换为 `fixed_points.coordinates`，并追加 `fixedStep` / `fixedPoints`（匹配到的固定线路点位与坐标）与匹配标记 `iscsdl`（=1）；未匹配则原样返回（`iscsdl=0`）。
+**`POST /api/v1/fixed-routes/`**（需要 Token 鉴权）—— 接收外部 GIS 规划发来的原始路线数据，用「起点名称 + 起点模糊坐标」以及「替换点名称/编号多级规则 + 替换点精确坐标」在数据库 `fixed_route` 表中查找命中的固定路线，命中后用固定路线的文本（`fixed_step`）和坐标（`fixed_points`）**整段切片替换**原始路线，并追加 `fixedStep` / `fixedPoints` 与匹配标记 `iscsdl=1`；未匹配则原样返回原始数据（`iscsdl=0`）。
 
-### 输入（仅原始路线，参考 数据.json 结构，字段平铺即可）
+### 1. 核心设计原则
 
-**请求体中不需要任何固定路线字段**（startName/endName/startPoint/endPoint/fixedStep/fixedPoints 一律不传），固定路线数据全部来自数据库。
-
-| 字段 | 说明 | 是否必填 |
+| 维度 | 处理策略 | 判定标准与容差 |
 |---|---|---|
-| `step` | 原始完整路线字符串（用 `-` 分段） | 必填 |
-| `points.coordinates` | 原始路线点位（GeoJSON LineString） | 必填 |
-| `originalStep` / `uploadStep` / `steps` 等 | 随原始数据原样传入 | 选填 |
+| **处理前置** | 门禁校验 | 仅当请求中 `iskey == "1"` 时执行匹配与替换，非 `"1"`（或缺失）直接原样返回并置 `iscsdl=0`。 |
+| **匹配顺序** | **正向漏斗模型** | **先判定起点**（缩小候选池），**再多级判定替换点**（出口收费站/国省道接驳点）。 |
+| **起始点判定** | 文本存在 + 坐标模糊 | ① 起点名在路线前部存在；<br>② 起点坐标按**小数点后 4 位截断匹配**（经纬度 `0.0001°` 约 10 米容差）。 |
+| **替换点判定** | 坐标精确 + 分级文本 | ① 坐标**去尾 0 必须完全相等**（零容差），且位置在起点之后；<br>② **级别 1（优先）**：编号 + 路名 + 坐标一致（如 `S356沿江公路` 对 `S356沿江公路`）；<br>③ **级别 2（次优）**：编号 + 坐标一致（如请求中为 `S356`，库中为 `S356沿江公路`）；<br>④ **级别 3（收费站）**：全称完全一致 + 坐标一致（如 `江苏季市收费站`）。 |
+| **替换执行** | **匹配期区间锁定** | 在匹配阶段一次性预先算好文本切片区间（`text_spans`）与坐标切片区间（`coord_span`），替换阶段直接切片替换，不再二次比对，防止文本名称多义与坐标索引漂移。 |
 
-### 数据库固定路线数据（fixed_route 表）
+### 2. 总体处理流程
 
-表结构（由 `migrate` 自动创建）：
+```
+客户端 POST /api/v1/fixed-routes/
+        │
+        ▼
+[0] DRF 全局鉴权（FixedTokenAuthentication，未带/错误 → 401）
+        │
+        ▼
+[1] 请求体格式校验（非 JSON 字典 → 400）
+        │
+        ▼
+[2] iskey 门禁校验：str(iskey) != "1" → 直接原样返回 + iscsdl=0  ✅ 终止
+        │
+        ▼
+[3] 必填字段校验：缺 step/originalStep 或 points.coordinates → 400  ✅ 终止
+        │
+        ▼
+[4] 路线拆段：_split_step() 兼容单横线与双横线
+        │
+        ▼
+[5] 逐条匹配数据库固定路线（_match_routes）：
+        ├─ 5.1 起点匹配：start_name 在前部存在 + start_point 小数点后 4 位截断模糊命中
+        ├─ 5.2 替换点匹配：end_point 去尾 0 完全相等且在起点之后 + 编号/路名分级文本判定
+        ├─ 5.3 排序与去重叠过滤
+        └─ 5.4 预先计算并锁定 text_spans 与 coord_span (start_idx, end_idx)
+        │
+        ▼
+[6] 无匹配路线 → 原样返回原始数据 + iscsdl=0  ✅ 终止
+        │
+        ▼
+[7] 文本切片替换：按预先锁定的区间替换 step / originalStep / uploadStep 为 fixed_step
+        │
+        ▼
+[8] 坐标切片替换：按锁定区间倒序替换 points.coordinates 为 fixed_points.coordinates
+        │
+        ▼
+[9] 响应组装：标记 iscsdl=1，追加 fixedStep 与 fixedPoints，返回 200 OK
+```
+
+### 3. 输入字段规范（平铺或嵌套 route 均兼容）
+
+请求体中**无需携带任何固定路线配置**，固定路线全量来自数据库。
+
+| 字段 | 类型 | 说明 | 是否必填 |
+|---|---|---|:---:|
+| `iskey` | string / int | 关键路径处理标识，只有为 `"1"` 或 `1` 时才触发匹配 | **必须为 "1"** |
+| `step` | string | 原始路线字符串（用 `-` 分段，如 `厂区-道路A-收费站-高速...`） | 必填（或有 originalStep） |
+| `originalStep` | string | 原始路线分段文本，与 `step` 类似 | 选填（两者至少有其一） |
+| `uploadStep` | string | 原始上报路线文本，若存在则同步参与替换 | 选填 |
+| `points.coordinates` | array | 原始路线经纬度点序列 `[[lng, lat], ...]`（GeoJSON LineString） | **必填** |
+| `steps` | array | 结构化分段信息列表（包含路段名称、ref 编号等） | 选填 |
+
+### 4. 数据库固定路线数据（fixed_route 表）
+
+表结构由 Django 迁移生成：
 
 | 字段 | 说明 | 示例 |
 |---|---|---|
-| `start_name` | 匹配段起点名称 | `扎下镇` |
-| `end_name` | 匹配段终点名称（收费站等） | `江苏沭阳北收费站` |
-| `start_point` | 起点坐标 JSON `[lng, lat]` | `[118.751556, 34.161008]` |
-| `end_point` | 终点坐标 JSON `[lng, lat]` | `[118.743252, 34.16809]` |
-| `fixed_step` | 固定路线字符串（内部 `-` 分隔） | `扎下镇-运河路-玉龙南路-龙城大道-江苏沭阳北收费站` |
-| `fixed_points` | 固定路线坐标（LineString） | `{"type": "LineString", "coordinates": [[lng, lat], ...]}` |
+| `start_name` | 匹配段起点名称（通常为发货企业/厂区名） | `大明重工有限公司` |
+| `end_name` | 匹配段终点名称（收费站或接驳道路路口） | `S356沿江公路` 或 `江苏季市收费站` |
+| `start_point` | 起点坐标 JSON `[lng, lat]` | `[120.199735, 31.954311]` |
+| `end_point` | 终点坐标 JSON `[lng, lat]` | `[120.211367, 31.963333]` |
+| `fixed_step` | 审批固定路线文本（`-` 分隔） | `大明重工有限公司-澄江路-联泰路-S356沿江公路` |
+| `fixed_points` | 固定路线坐标 GeoJSON LineString | `{"type": "LineString", "coordinates": [[120.199735, 31.954311], ...]}` |
 
-插入/替换数据（`start_name + end_name` 唯一，重复插入即覆盖）：
+> 唯一约束：`(start_name, end_name)` 唯一，重复录入即覆盖。
 
-```sql
-INSERT INTO fixed_route
-  (start_name, end_name, start_point, end_point, fixed_step, fixed_points, created_at, updated_at)
-VALUES
-  ('扎下镇', '江苏沭阳北收费站',
-   '[118.751556, 34.161008]', '[118.743252, 34.16809]',
-   '扎下镇-运河路-玉龙南路-龙城大道-江苏沭阳北收费站',
-   '{"type": "LineString", "coordinates": [[118.751556, 34.161008], "...真实固定路线坐标...", [118.743252, 34.16809]]}',
-   NOW(), NOW())
-ON DUPLICATE KEY UPDATE
-  start_point = VALUES(start_point),
-  end_point   = VALUES(end_point),
-  fixed_step  = VALUES(fixed_step),
-  fixed_points = VALUES(fixed_points),
-  updated_at  = NOW();
+### 5. 关键算法与规则详解
+
+#### 5.1 起点坐标 4 位小数模糊截断匹配
+实际业务中，GIS 路径规划计算的起点坐标通常吸附到最近路网节点，与数据库中测绘的企业厂区大门点位常有 5～20 米微小偏差。
+代码采用 `_trunc4` 算法，将经度与纬度分别截断至小数点后第 4 位（`0.0001°` 约 10 米量级）：
+```python
+# 示例：
+请求起点: [120.422615, 32.062315] -> 截断为 120.4226, 32.0623
+库内起点: [120.422606, 32.062310] -> 截断为 120.4226, 32.0623
+# 两者完全相等，模糊匹配命中！
 ```
 
-### 处理逻辑
+#### 5.2 替换点编号与路名分级匹配
+数据库中的替换点既有纯收费站（如 `江苏季市收费站`），也有国省道接驳点（如 `S356沿江公路`、`G345启那线`、`S356`）。
+代码采用正则 `^([A-Za-z]+\d+)(.*)$` 分离道路编号与道路名称：
+* **级别 1（最高优先级）**：全称完全一致，或双方编号与路名皆完全相同；
+* **级别 2（次高优先级）**：双方编号相同且至少一方缺路名（例如请求中由于地图数据简称为 `S356`，库中为 `S356沿江公路`，编号均为 `S356`，坐标精确一致，允许降级匹配）；
+* **级别 3（收费站）**：收费站名称全字相等。
 
-1. 把 `step` 按 `-` 拆成段，逐条匹配数据库 `fixed_route`：记录的 `start_name` 在前、`end_name` 在后同时出现即命中；
-2. **`step` / `originalStep` / `uploadStep` 处理一致**：各字段中「起点…终点」一段整段替换为数据库 `fixed_step`（固定段内部与前后段统一用 `-` 连接；请求中不存在的字段不新增）；
-3. `points.coordinates` 中从 `start_point` 到 `end_point` 的坐标段整体替换为 `fixed_points.coordinates`（定位规则：精确匹配 ±1e-5，否则取欧氏最近点）；
-4. 响应新增 `iscsdl`（匹配到固定线路=1，否则=0），并**追加 `fixedStep` / `fixedPoints`**（匹配到的固定线路点位与坐标，取第一条匹配记录；多段匹配时 `step` / `originalStep` / `uploadStep` / `points` 仍全部替换）；
-5. 未匹配到任何固定路线时原样返回原始数据（`iscsdl=0`，不返回 `fixedStep` / `fixedPoints`）。
+#### 5.3 匹配期区间锁定与无感替换
+为避免 `originalStep` 与 `step` 分段数量不同造成的二次查找错位，匹配阶段使用 `_locate_text_spans` 单向递增锁定每个文本字段的替换下标 `(start, end)` 与坐标下标 `coord_span = (start_idx, end_idx)`。
+替换阶段直接切片拼接：
+* 文本：`tokens[:s] + [fixed_step] + tokens[e + 1:]`
+* 坐标：`coords[:start_idx] + fixed_coords + coords[end_idx + 1:]`（多段倒序替换防下标漂移）
 
-### 请求示例
+### 6. 请求与响应示例
 
-```bash
-curl -X POST http://<服务器IP>:8000/api/v1/fixed-routes/ \
-  -H "Authorization: Token <你的API_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d @request.json
-```
-
-`request.json`（只有原始路线字段）：
+#### 请求示例（以含有 S356 编号的大明重工为例）
 
 ```json
 {
-  "step": "扎下镇-XZ04天津北路-G205山深线-江苏沭阳北收费站-G2-G30-G3-S69-江苏丰县北收费站-G237济宁线-G518-X208王宋线-徐州能动电动车工业园",
-  "originalStep": "同上",
-  "uploadStep": "同上",
-  "steps": [],
-  "points": {"type": "LineString", "coordinates": [[118.751556, 34.161008], "…原始坐标…"]}
+  "iskey": "1",
+  "djId": "B3200002026102000264",
+  "beginDistName": "大明重工有限公司",
+  "endDistName": "扬州天勤混凝土预制构件有限公司",
+  "step": "大明重工有限公司-澄江路-联泰路-S356-扬州天勤混凝土预制构件有限公司",
+  "originalStep": "大明重工有限公司-澄江路-联泰路-S356-扬州天勤混凝土预制构件有限公司",
+  "points": {
+    "type": "LineString",
+    "coordinates": [
+      [120.199735, 31.954311],
+      [120.201200, 31.956000],
+      [120.211367, 31.963333],
+      [119.609873, 32.314599]
+    ]
+  }
 }
 ```
 
-### 响应（step/originalStep/uploadStep 统一替换 + iscsdl 匹配标记 + fixedStep/fixedPoints 命中数据）
+#### 响应示例（命中固定路线）
 
 ```json
 {
-  "step": "扎下镇-运河路-玉龙南路-龙城大道-江苏沭阳北收费站-G2-G30-G3-S69-江苏丰县北收费站-G237济宁线-G518-X208王宋线-徐州能动电动车工业园",
-  "originalStep": "扎下镇-运河路-玉龙南路-龙城大道-江苏沭阳北收费站-G2-G30-G3-S69-江苏丰县北收费站-G237济宁线-G518-X208王宋线-徐州能动电动车工业园",
-  "uploadStep": "…（与 step 同样替换）",
-  "steps": [],
-  "regionDistName": "…（不变）",
-  "endDistName": "…（不变）",
-  "points": {"type": "LineString", "coordinates": ["固定路线坐标 + 原始路线剩余坐标"]},
+  "iskey": "1",
+  "djId": "B3200002026102000264",
+  "beginDistName": "大明重工有限公司",
+  "endDistName": "扬州天勤混凝土预制构件有限公司",
+  "step": "大明重工有限公司-澄江路-联泰路-S356沿江公路-扬州天勤混凝土预制构件有限公司",
+  "originalStep": "大明重工有限公司-澄江路-联泰路-S356沿江公路-扬州天勤混凝土预制构件有限公司",
+  "points": {
+    "type": "LineString",
+    "coordinates": [
+      [120.199735, 31.954311],
+      "...固定路线中间点位...",
+      [120.211367, 31.963333],
+      [119.609873, 32.314599]
+    ]
+  },
   "iscsdl": 1,
-  "fixedStep": "扎下镇-运河路-玉龙南路-龙城大道-江苏沭阳北收费站",
-  "fixedPoints": {"type": "LineString", "coordinates": ["数据库中的固定路线坐标"]}
+  "fixedStep": "大明重工有限公司-澄江路-联泰路-S356沿江公路",
+  "fixedPoints": {
+    "type": "LineString",
+    "coordinates": [
+      [120.199735, 31.954311],
+      "...数据库审批标准点位...",
+      [120.211367, 31.963333]
+    ]
+  }
 }
 ```
 
-- `step` / `originalStep` / `uploadStep`：**处理一致**——匹配到的「起点…终点」段在各字段中整段替换为 `fixed_step`（固定段内部与前后段统一用 `-` 分隔）；请求中原本没有的字段不新增
-- `iscsdl`：**是否匹配到固定线路**——匹配到返回 `1`，未匹配返回 `0`（未匹配时响应为原始数据原样返回，`iscsdl=0`，不返回 `fixedStep` / `fixedPoints`）
-- `fixedStep`：**匹配到的固定线路点位**（string），`fixedPoints`：**匹配到的固定线路坐标**（object）——直接取用，无需再调 GET 接口；取第一条匹配记录，多段匹配时 `step` / `originalStep` / `uploadStep` / `points` 仍全部替换
-- 校验失败返回 `400`，未带 Token 返回 `401`
+- **`iscsdl`**：是否命中固定路线，`1` 表示已匹配并完成替换，`0` 表示未匹配原样返回；
+- **`fixedStep` / `fixedPoints`**：命中的固定路线标准分段文本与坐标，直接供前端绘制或归档使用。
 
 **`GET /api/v1/fixed-routes/`**（需要 Token）—— 列出数据库中的全部固定路线，用于确认数据已入库。
 
